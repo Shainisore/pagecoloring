@@ -2602,6 +2602,12 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 		goto out;
 	}
 
+	//if reclaiming color page, scan file only
+	if (sc->order==MAX_ORDER) {
+		scan_balance = SCAN_FILE;
+		goto out;
+	}
+
 	/*
 	 * Do not apply any pressure balancing cleverness when the
 	 * system is close to OOM, scan both anon and file equally
@@ -3026,6 +3032,9 @@ static void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
 	} while ((memcg = mem_cgroup_iter(target_memcg, memcg, NULL)));
 }
 
+static volatile int shrink_data[200][3];
+static volatile int shrink_data_index=0;
+
 static void shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 {
 	struct reclaim_state *reclaim_state = current->reclaim_state;
@@ -3111,17 +3120,41 @@ again:
 		unsigned long free, anon;
 		int z;
 
-		free = sum_zone_node_page_state(pgdat->node_id, NR_FREE_PAGES);
+		if(sc->order==MAX_ORDER){
+			// free = atomic_long_read(&(pgdat->node_zones+2)->managed_color_pages)
+			// -zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+2, NR_VM_ZONE_STAT_ITEMS);
+			free = sum_zone_node_page_state(pgdat->node_id, NR_FREE_COLOR_PAGES);
+			// free = zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+0, NR_FREE_COLOR_PAGES)
+			// 	 + zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+1, NR_FREE_COLOR_PAGES)
+			// 	 + zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+2, NR_FREE_COLOR_PAGES);
+		} else {
+			free = sum_zone_node_page_state(pgdat->node_id, NR_FREE_PAGES);	
+		}
+		
 		file = node_page_state(pgdat, NR_ACTIVE_FILE) +
 			   node_page_state(pgdat, NR_INACTIVE_FILE);
 
-		for (z = 0; z < MAX_NR_ZONES; z++) {
-			struct zone *zone = &pgdat->node_zones[z];
-			if (!managed_zone(zone))
-				continue;
+		if (sc->order==MAX_ORDER) {
+			for (z = 0; z < MAX_NR_ZONES; z++) {
+				struct zone *zone = &pgdat->node_zones[z];
+				if (!managed_zone(zone))
+					continue;
 
-			total_high_wmark += high_wmark_pages(zone);
+				total_high_wmark += color_high_wmark_pages(zone);
+			}
+		} else {
+			for (z = 0; z < MAX_NR_ZONES; z++) {
+				struct zone *zone = &pgdat->node_zones[z];
+				if (!managed_zone(zone))
+					continue;
+
+				total_high_wmark += high_wmark_pages(zone);
+			}			
 		}
+		// if(sc->order==MAX_ORDER){
+		// 	struct zone *zone = &pgdat->node_zones[2];
+		// 	total_high_wmark = high_wmark_pages(zone)>>3;
+		// }
 
 		/*
 		 * Consider anon: if that's low too, this isn't a
@@ -3136,12 +3169,23 @@ again:
 			anon >> sc->priority;
 	}
 
+	// //debug_stat
+	// if(sc->order == 11)
+	// 	shrink_data[shrink_data_index][0]=sum_zone_node_page_state(0, NR_FREE_COLOR_PAGES);
+
 	shrink_node_memcgs(pgdat, sc);
 
 	if (reclaim_state) {
 		sc->nr_reclaimed += reclaim_state->reclaimed_slab;
 		reclaim_state->reclaimed_slab = 0;
 	}
+
+	// //debug_stat
+	// if(sc->order == 11){
+	// 	shrink_data[shrink_data_index][1]=sc->nr_reclaimed;
+	// 	shrink_data[shrink_data_index][2]=sum_zone_node_page_state(0, NR_FREE_COLOR_PAGES);
+	// 	shrink_data_index=shrink_data_index+1;
+	// }
 
 	/* Record the subtree's reclaim efficiency */
 	vmpressure(sc->gfp_mask, sc->target_mem_cgroup, true,
@@ -3305,7 +3349,7 @@ static void shrink_zones(struct zonelist *zonelist, struct scan_control *sc)
 			 * page allocations.
 			 */
 			if (IS_ENABLED(CONFIG_COMPACTION) &&
-			    sc->order > PAGE_ALLOC_COSTLY_ORDER &&
+			    sc->order > PAGE_ALLOC_COSTLY_ORDER && sc->order != 11 &&
 			    compaction_ready(zone, sc)) {
 				sc->compaction_ready = true;
 				continue;
@@ -3778,16 +3822,30 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 	 * Check watermarks bottom-up as lower zones are more likely to
 	 * meet watermarks.
 	 */
-	for (i = 0; i <= highest_zoneidx; i++) {
-		zone = pgdat->node_zones + i;
+	if (order == MAX_ORDER) {
+		for (i = 0; i <= highest_zoneidx; i++) {
+			zone = pgdat->node_zones + i;
 
-		if (!managed_zone(zone))
-			continue;
+			if (!managed_zone(zone))
+				continue;
 
-		mark = high_wmark_pages(zone);
-		if (zone_watermark_ok_safe(zone, order, mark, highest_zoneidx))
-			return true;
+			mark = color_high_wmark_pages(zone);
+			if (color_zone_watermark_ok_safe(zone, order, mark, highest_zoneidx))
+				return true;
+		}
+	} else {
+		for (i = 0; i <= highest_zoneidx; i++) {
+			zone = pgdat->node_zones + i;
+
+			if (!managed_zone(zone))
+				continue;
+
+			mark = high_wmark_pages(zone);
+			if (zone_watermark_ok_safe(zone, order, mark, highest_zoneidx))
+				return true;
+		}
 	}
+
 
 	/*
 	 * If a node has no populated zone within highest_zoneidx, it does not
@@ -3863,13 +3921,25 @@ static bool kswapd_shrink_node(pg_data_t *pgdat,
 
 	/* Reclaim a number of pages proportional to the number of zones */
 	sc->nr_to_reclaim = 0;
-	for (z = 0; z <= sc->reclaim_idx; z++) {
-		zone = pgdat->node_zones + z;
-		if (!managed_zone(zone))
-			continue;
 
-		sc->nr_to_reclaim += max(high_wmark_pages(zone), SWAP_CLUSTER_MAX);
+	if(sc->order == MAX_ORDER) {
+		for (z = 0; z <= sc->reclaim_idx; z++) {
+			zone = pgdat->node_zones + z;
+			if (!managed_zone(zone))
+				continue;
+
+			sc->nr_to_reclaim += max(color_high_wmark_pages(zone), SWAP_CLUSTER_MAX);
+		}
+	} else {
+		for (z = 0; z <= sc->reclaim_idx; z++) {
+			zone = pgdat->node_zones + z;
+			if (!managed_zone(zone))
+				continue;
+
+			sc->nr_to_reclaim += max(high_wmark_pages(zone), SWAP_CLUSTER_MAX);
+		}
 	}
+
 
 	/*
 	 * Historically care was taken to put equal pressure on all zones but
@@ -3963,14 +4033,27 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	 * stall or direct reclaim until kswapd is finished.
 	 */
 	nr_boost_reclaim = 0;
-	for (i = 0; i <= highest_zoneidx; i++) {
-		zone = pgdat->node_zones + i;
-		if (!managed_zone(zone))
-			continue;
 
-		nr_boost_reclaim += zone->watermark_boost;
-		zone_boosts[i] = zone->watermark_boost;
+	if (order==MAX_ORDER) {
+		for (i = 0; i <= highest_zoneidx; i++) {
+			zone = pgdat->node_zones + i;
+			if (!managed_zone(zone))
+				continue;
+
+			nr_boost_reclaim += zone->colorwatermark_boost;
+			zone_boosts[i] = zone->colorwatermark_boost;
+		}
+	} else {
+		for (i = 0; i <= highest_zoneidx; i++) {
+			zone = pgdat->node_zones + i;
+			if (!managed_zone(zone))
+				continue;
+
+			nr_boost_reclaim += zone->watermark_boost;
+			zone_boosts[i] = zone->watermark_boost;
+		}
 	}
+
 	boosted = nr_boost_reclaim;
 
 restart:
@@ -4549,7 +4632,7 @@ static unsigned long node_pagecache_reclaimable(struct pglist_data *pgdat)
 static int __node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 {
 	/* Minimum pages needed in order to stay on node */
-	const unsigned long nr_pages = 1 << order;
+	const unsigned long nr_pages = 1 << (order==MAX_ORDER?0:order);
 	struct task_struct *p = current;
 	unsigned int noreclaim_flag;
 	struct scan_control sc = {

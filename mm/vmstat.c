@@ -1004,6 +1004,20 @@ unsigned long sum_zone_node_page_state(int node,
 	return count;
 }
 
+//color version
+unsigned long color_sum_zone_node_page_state(int node,
+				 enum zone_stat_item item)
+{
+	struct zone *zones = NODE_DATA(node)->node_zones;
+	int i;
+	unsigned long count = 0;
+
+	for (i = 0; i < MAX_NR_ZONES; i++)
+		count += zone_page_state(zones + i, item);
+
+	return count;
+}
+
 /* Determine the per node value of a numa stat item. */
 unsigned long sum_zone_numa_event_state(int node,
 				 enum numa_stat_item item)

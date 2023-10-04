@@ -158,7 +158,8 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
-	NR_VM_ZONE_STAT_ITEMS };
+	NR_VM_ZONE_STAT_ITEMS,
+	NR_FREE_COLOR_PAGES = NR_VM_ZONE_STAT_ITEMS};
 
 enum node_stat_item {
 	NR_LRU_BASE,
@@ -356,12 +357,23 @@ enum zone_watermarks {
 #define high_wmark_pages(z) (z->_watermark[WMARK_HIGH] + z->watermark_boost)
 #define wmark_pages(z, i) (z->_watermark[i] + z->watermark_boost)
 
+#define color_min_wmark_pages(z) (z->_colorwatermark[WMARK_MIN] + z->colorwatermark_boost)
+#define color_low_wmark_pages(z) (z->_colorwatermark[WMARK_LOW] + z->colorwatermark_boost)
+#define color_high_wmark_pages(z) (z->_colorwatermark[WMARK_HIGH] + z->colorwatermark_boost)
+#define color_wmark_pages(z, i) (z->_colorwatermark[i] + z->colorwatermark_boost)
+
 /* Fields and list protected by pagesets local_lock in page_alloc.c */
 struct per_cpu_pages {
 	int count;		/* number of pages in the list */
 	int high;		/* high watermark, emptying needed */
 	int batch;		/* chunk size for buddy add/remove */
 	short free_factor;	/* batch scaling factor during free */
+
+	// used by color page
+	int color_count;
+	int color_high;
+	int color_batch;
+	short color_free_factor;
 #ifdef CONFIG_NUMA
 	short expire;		/* When 0, remote pagesets are drained */
 #endif
@@ -494,6 +506,10 @@ struct zone {
 	unsigned long _watermark[NR_WMARK];
 	unsigned long watermark_boost;
 
+	/* color list watermark */
+	unsigned long _colorwatermark[NR_WMARK];
+	unsigned long colorwatermark_boost;
+
 	unsigned long nr_reserved_highatomic;
 
 	/*
@@ -519,6 +535,9 @@ struct zone {
 	 */
 	int pageset_high;
 	int pageset_batch;
+
+	int color_pageset_high;
+	int color_pageset_batch;
 
 #ifndef CONFIG_SPARSEMEM
 	/*
@@ -574,6 +593,7 @@ struct zone {
 	 * present_pages should get_online_mems() to get a stable value.
 	 */
 	atomic_long_t		managed_pages;
+	atomic_long_t		managed_color_pages;
 	unsigned long		spanned_pages;
 	unsigned long		present_pages;
 #if defined(CONFIG_MEMORY_HOTPLUG)
@@ -606,9 +626,6 @@ struct zone {
 
 	/* free areas of different sizes */
 	struct free_area	free_area[MAX_ORDER+1];
-
-	/* pagecolor */
-	// struct free_area	free_color_area;
 
 	/* zone flags, see below */
 	unsigned long		flags;
@@ -656,7 +673,7 @@ struct zone {
 
 	ZONE_PADDING(_pad3_)
 	/* Zone statistics */
-	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
+	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS+1];  //add an entry to count allocated color page
 	atomic_long_t		vm_numa_event[NR_VM_NUMA_EVENT_ITEMS];
 } ____cacheline_internodealigned_in_smp;
 
@@ -939,6 +956,9 @@ bool zone_watermark_ok(struct zone *z, unsigned int order,
 		unsigned long mark, int highest_zoneidx,
 		unsigned int alloc_flags);
 bool zone_watermark_ok_safe(struct zone *z, unsigned int order,
+		unsigned long mark, int highest_zoneidx);
+
+bool color_zone_watermark_ok_safe(struct zone *z, unsigned int order,
 		unsigned long mark, int highest_zoneidx);
 /*
  * Memory initialization context, use to differentiate memory added by
