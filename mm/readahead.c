@@ -213,7 +213,12 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 			continue;
 		}
 
-		page = __page_cache_alloc(gfp_mask);
+		if(ractl->color!=11){
+			page = __page_cache_alloc(gfp_mask);
+		}else{
+			page = __page_cache_alloc_normal(gfp_mask);
+		}
+		
 		if (!page)
 			break;
 		if (mapping->a_ops->readpages) {

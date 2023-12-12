@@ -2175,15 +2175,24 @@ struct page *alloc_pages(gfp_t gfp, unsigned order)
 	 * No reference counting needed for current->mempolicy
 	 * nor system default_policy
 	 */
-	if (pol->mode == MPOL_INTERLEAVE)
+	if (pol->mode == MPOL_INTERLEAVE){
 		page = alloc_page_interleave(gfp, order, interleave_nodes(pol));
-	else if (pol->mode == MPOL_PREFERRED_MANY)
+		// if(order == 11)
+		// 	printk("1-Request order is %d\n", order);
+	}
+	else if (pol->mode == MPOL_PREFERRED_MANY) {
 		page = alloc_pages_preferred_many(gfp, order,
 				numa_node_id(), pol);
-	else
+		// if(order == 11)
+		// 	printk("2-Request order is %d\n", order);
+	}
+	else {
 		page = __alloc_pages(gfp, order,
 				policy_node(gfp, pol, numa_node_id()),
 				policy_nodemask(gfp, pol));
+		//if(order == 11)
+			//printk("3-Request order is %d\n", order);
+	}
 
 	return page;
 }

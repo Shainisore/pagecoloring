@@ -1024,6 +1024,25 @@ struct page *__page_cache_alloc(gfp_t gfp)
 	return alloc_pages(gfp, MAX_ORDER);
 }
 EXPORT_SYMBOL(__page_cache_alloc);
+
+struct page *__page_cache_alloc_normal(gfp_t gfp)
+{
+	int n;
+	struct page *page;
+
+	if (cpuset_do_page_mem_spread()) {
+		unsigned int cpuset_mems_cookie;
+		do {
+			cpuset_mems_cookie = read_mems_allowed_begin();
+			n = cpuset_mem_spread_node();
+			page = __alloc_pages_node(n, gfp, 0);
+		} while (!page && read_mems_allowed_retry(cpuset_mems_cookie));
+
+		return page;
+	}
+	return alloc_pages(gfp, 0);
+}
+EXPORT_SYMBOL(__page_cache_alloc_normal);
 #endif
 
 /*
@@ -2524,8 +2543,17 @@ static int filemap_readahead(struct kiocb *iocb, struct file *file,
 {
 	if (iocb->ki_flags & IOCB_NOIO)
 		return -EAGAIN;
-	page_cache_async_readahead(mapping, &file->f_ra, file, page,
-			page->index, last_index - page->index);
+
+	if (iocb->color != 11){
+		page_cache_async_readahead(mapping, &file->f_ra, file, page,
+				page->index, last_index - page->index);
+	} else {
+		page_cache_async_readahead_normal(mapping, &file->f_ra, file, page,
+				page->index, last_index - page->index);
+	}
+
+	// page_cache_async_readahead(mapping, &file->f_ra, file, page,
+	// 		page->index, last_index - page->index);
 	return 0;
 }
 
@@ -2549,8 +2577,16 @@ retry:
 	if (!pagevec_count(pvec)) {
 		if (iocb->ki_flags & IOCB_NOIO)
 			return -EAGAIN;
-		page_cache_sync_readahead(mapping, ra, filp, index,
+
+		if (iocb->color != 11){
+			page_cache_sync_readahead(mapping, ra, filp, index,
 				last_index - index);
+		} else {
+			page_cache_sync_readahead_normal(mapping, ra, filp, index,
+				last_index - index);
+		}
+		
+
 		filemap_get_read_batch(mapping, index, last_index, pvec);
 	}
 	if (!pagevec_count(pvec)) {
@@ -2950,6 +2986,7 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 	struct file_ra_state *ra = &file->f_ra;
 	struct address_space *mapping = file->f_mapping;
 	DEFINE_READAHEAD(ractl, file, ra, mapping, vmf->pgoff);
+	ractl.color=11;
 	struct file *fpin = NULL;
 	unsigned int mmap_miss;
 
@@ -3012,7 +3049,9 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 		WRITE_ONCE(ra->mmap_miss, --mmap_miss);
 	if (PageReadahead(page)) {
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-		page_cache_async_readahead(mapping, ra, file,
+		// page_cache_async_readahead(mapping, ra, file,
+		// 			   page, offset, ra->ra_pages);
+		page_cache_async_readahead_normal(mapping, ra, file,
 					   page, offset, ra->ra_pages);
 	}
 	return fpin;

@@ -1077,44 +1077,6 @@ static int count_bs(struct zone *zone){
 	return sum + area->nr_free;
 }
 
-// static volatile int san_check;
-// //proof of concept----san_check=sanity_check(zone);
-// static int sanity_check(struct zone *zone){
-// 	volatile int i, j, sum;
-// 	volatile struct free_area *area;
-// 	volatile struct page *page;
-
-// 	for(j = 3; j < MAX_ORDER; ++j){
-// 		sum = 0;
-// 		area = &(zone->free_area[j]);
-// 		for(i = 0; i < 4; ++i){	
-// 			list_for_each_entry(page, &area->free_list[i], lru){
-// 				// if (0 == (page_to_pfn(page) & 7)) {
-// 				// 	sum += 1;
-// 				// }
-// 				sum += count_color(j, page);
-// 			}
-// 		}
-// 		if(sum != (area->nr_free) << (j-3)){
-// 			return false;
-// 		}
-// 	}
-
-// 	sum = 0;
-// 	area = &(zone->free_area[MAX_ORDER]);
-// 	for(i = 0; i < 4; ++i){	
-// 		list_for_each_entry(page, &area->free_list[i], lru){
-// 			if (0 == (page_to_pfn(page) & 7)) {
-// 				sum += 1;
-// 			}
-// 		}
-// 	}
-// 	if(sum != area->nr_free){
-// 		return false;
-// 	}
-
-// 	return true;
-// }
 
 /*
  * Freeing function for a buddy system allocator.
@@ -1141,7 +1103,6 @@ static int count_bs(struct zone *zone){
  */
 
 static inline void __free_one_page(struct page *page,
-// static noinline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
 		int migratetype, fpi_t fpi_flags)
@@ -1152,7 +1113,7 @@ static inline void __free_one_page(struct page *page,
 	unsigned int max_order;
 	struct page *buddy;
 	bool to_tail;
-	volatile int border;
+	int border;
 
 	max_order = min_t(unsigned int, MAX_ORDER - 1, pageblock_order);
 
@@ -2722,32 +2683,64 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 		clear_page_pfmemalloc(page);
 }
 
+
+// static volatile long error_count = 0;
+// static volatile long error_count_f = 0;
+// static volatile long error_count_0 = 0;
+// static volatile long error_count_1 = 0;
+// static volatile long error_count_2 = 0;
 /*
  * Go through the free lists for the given migratetype and remove
  * the smallest available page from the freelists
  */
 static __always_inline
+// static noinline
 struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 						int migratetype)
 {
 	unsigned int current_order;
 	struct free_area *area;
 	struct page *page;
-
-	// san_check=sanity_check(zone);
-	//nr_color=count_bs(zone);
+	struct page *page_hold;
 
 	/* Find a page of the appropriate size in the preferred list */
 	if(order != 11){
+try_again:
 		for (current_order = order; current_order < MAX_ORDER; ++current_order) {
 			area = &(zone->free_area[current_order]);
 			page = get_page_from_free_area(area, migratetype);
 			if (!page)
 				continue;
+			
 			del_page_from_free_list(page, zone, current_order);
 			//expand(zone, &page, order, current_order, migratetype);
 			expand(zone, page, order, current_order, migratetype);
+
+			while (order < 3 && (0 == (page_to_pfn(&page[0]) & 7))) {
+				area = &(zone->free_area[order]);
+				page_hold = get_page_from_free_area(area, migratetype);
+				if (!page_hold  || (0 == (page_to_pfn(&page[0]) & 7))) {
+					current_order = order + 1;
+					goto try_again;
+				}
+					
+				del_page_from_free_list(page_hold, zone, order);
+				
+				if (order == 0) {
+					add_to_free_list(&page[0], zone, 11, migratetype);
+					set_buddy_order(&page[0], 11);
+				} else {
+					add_to_free_list(&page[0], zone, order, migratetype);
+					set_buddy_order(&page[0], order);
+				}
+
+
+				page = page_hold;
+			}
+
+
 			set_pcppage_migratetype(page, migratetype);
+
 			return page;
 		}		
 	} else {
@@ -3198,7 +3191,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
  * condition simpler.
  */
 static __always_inline bool
-//static noinline bool __attribute__((optimize("O0")))
+// static noinline bool __attribute__((optimize("O0")))
 __rmqueue_fallback(struct zone *zone, int order, int start_migratetype,
 						unsigned int alloc_flags)
 {
@@ -3267,7 +3260,8 @@ do_steal:
 	page = get_page_from_free_area(area, fallback_mt);
 
 	steal_suitable_fallback(zone, page, alloc_flags, start_migratetype,
-								can_steal);
+								false);
+								//can_steal);
 								//order==3?false:can_steal);
 
 	trace_mm_page_alloc_extfrag(page, order, current_order,
@@ -3308,8 +3302,11 @@ retry:
 			page = __rmqueue_cma_fallback(zone, order);
 
 		if (!page && __rmqueue_fallback(zone, (order==MAX_ORDER?3:order), migratetype,
-								alloc_flags))
-			goto retry;
+								alloc_flags)) {
+									//order=(order==MAX_ORDER?0:order);
+									goto retry;
+								}
+			
 	}
 out:
 	if (page)
@@ -3370,25 +3367,10 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	 * pages added to the pcp list.
 	 */
 	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << (order==MAX_ORDER?0:order)));
-
-	// adjust color page counter
-	// __mod_zone_page_state(zone, NR_FREE_COLOR_PAGES, -count_color(order, NULL));	
-	// if (order == MAX_ORDER) {
-	// 	__mod_zone_page_state(zone, NR_FREE_COLOR_PAGES, -i);
-	// } else if (order >= 3) {
-	// 	__mod_zone_page_state(zone, NR_FREE_COLOR_PAGES, -(i << (order - 3)));
-	// }	
-
 	__mod_zone_page_state(zone, NR_FREE_COLOR_PAGES, 
 							-zone_page_state(zone, NR_FREE_COLOR_PAGES)
 							+count_bs(zone));	
 	
-	// if (order == MAX_ORDER) {
-	// 	__mod_zone_page_state(zone, NR_FREE_COLOR_PAGES, -1-i);
-	// } else if (order >= 3) {
-	// 	__mod_zone_page_state(zone, NR_FREE_COLOR_PAGES, -(i << (order - 3)));
-	// }
-
 	spin_unlock(&zone->lock);
 	return allocated;
 }
@@ -3800,7 +3782,12 @@ void free_unref_page(struct page *page, unsigned int order)
 	}
 
 	local_lock_irqsave(&pagesets.lock, flags);
-	free_unref_page_commit(page, pfn, migratetype, order);
+
+	if(!(page_to_pfn(&page[0]) & 7)){
+		free_unref_page_commit(page, pfn, migratetype, 11);
+	} else {
+		free_unref_page_commit(page, pfn, migratetype, order);
+	}
 	local_unlock_irqrestore(&pagesets.lock, flags);
 }
 
@@ -3814,7 +3801,7 @@ void free_unref_page_list(struct list_head *list)
 	int batch_count = 0;
 	int migratetype;
 
-	int volatile color_index;
+	int color_index;
 
 	/* Prepare pages for freeing */
 	list_for_each_entry_safe(page, next, list, lru) {
@@ -3858,8 +3845,7 @@ void free_unref_page_list(struct list_head *list)
 			free_unref_page_commit(page, pfn, migratetype, 11);
 		} else {
 			free_unref_page_commit(page, pfn, migratetype, 0);
-		}
-		
+		}		
 
 		/*
 		 * Guard against excessive IRQ disabled times when we get
@@ -4003,6 +3989,8 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 {
 	struct page *page;
 
+	// int check_alloced = 0;
+
 	do {
 		if (list_empty(list)) {
 			int batch;
@@ -4026,6 +4014,8 @@ struct page *__rmqueue_pcplist(struct zone *zone, unsigned int order,
 			alloced = rmqueue_bulk(zone, order,
 					batch, list,
 					migratetype, alloc_flags);
+
+			// check_alloced = alloced;
 
 			if(order ==MAX_ORDER){
 				pcp->color_count += alloced << 0;
@@ -4560,8 +4550,6 @@ static inline unsigned int gfp_to_alloc_flags_cma(gfp_t gfp_mask,
 	return alloc_flags;
 }
 
-
-static volatile int flag_check;
 /*
  * get_page_from_freelist goes through the zonelist trying to allocate
  * a page.
@@ -4576,8 +4564,6 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 	bool no_fallback;
 	bool colormark;
 
-	flag_check = alloc_flags;
-
 retry:
 	/*
 	 * Scan zonelist, looking for a zone with enough free.
@@ -4589,9 +4575,6 @@ retry:
 					ac->nodemask) {
 		struct page *page;
 		unsigned long mark;
-
-		//exclude color page from zone 0
-		//if ((unsigned long)atomic_long_read(&zone->managed_pages) < 5000) {continue;}
 
 		if (cpusets_enabled() &&
 			(alloc_flags & ALLOC_CPUSET) &&
@@ -4638,9 +4621,6 @@ retry:
 			local_nid = zone_to_nid(ac->preferred_zoneref->zone);
 			if (zone_to_nid(zone) != local_nid) {
 				alloc_flags &= ~ALLOC_NOFRAGMENT;
-
-				flag_check = alloc_flags;
-
 				goto retry;
 			}
 		}
@@ -5206,8 +5186,6 @@ __perform_reclaim(gfp_t gfp_mask, unsigned int order,
 	return progress;
 }
 
-static volatile int rec_data[200][3];
-static volatile int rec_data_index=0;
 /* The really slow allocator path where we enter direct reclaim */
 static inline struct page *
 __alloc_pages_direct_reclaim(gfp_t gfp_mask, unsigned int order,
@@ -5217,19 +5195,7 @@ __alloc_pages_direct_reclaim(gfp_t gfp_mask, unsigned int order,
 	struct page *page = NULL;
 	bool drained = false;
 
-	// //debug_stat
-	// if(order == 11)
-	// 	rec_data[rec_data_index][0]=sum_zone_node_page_state(0, NR_FREE_COLOR_PAGES);
-
 	*did_some_progress = __perform_reclaim(gfp_mask, order, ac);
-
-	// //debug_stat
-	// if(order == 11){
-	// 	rec_data[rec_data_index][1]=*did_some_progress;
-	// 	rec_data[rec_data_index][2]=sum_zone_node_page_state(0, NR_FREE_COLOR_PAGES);
-	// 	rec_data_index=rec_data_index+1;
-	// }
-
 	if (unlikely(!(*did_some_progress)))
 		return NULL;
 
@@ -6006,9 +5972,10 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 
 	/* First allocation attempt */
 	page = get_page_from_freelist(alloc_gfp, order, alloc_flags, &ac);
-	if (likely(page))
+	if (likely(page)){
 		goto out;
-
+	}
+		
 	alloc_gfp = gfp;
 	ac.spread_dirty_pages = false;
 
@@ -9131,7 +9098,7 @@ static void __setup_per_zone_wmarks(void)
 			zone->_watermark[WMARK_MIN] = tmp;
 
 			//setup colorwatermark
-			zone->_colorwatermark[WMARK_MIN] = tmp>>3;
+			zone->_colorwatermark[WMARK_MIN] = tmp>>1;
 		}
 
 		/*
@@ -9148,8 +9115,8 @@ static void __setup_per_zone_wmarks(void)
 		zone->_watermark[WMARK_HIGH] = min_wmark_pages(zone) + tmp * 2;
 
 		//setup colorwatermark
-		tmp = max_t(u64, tmp >> 5,
-			    mult_frac(zone_managed_pages(zone)>>3,
+		tmp = max_t(u64, tmp >> 4,
+			    mult_frac(zone_managed_pages(zone)>>2,
 				      watermark_scale_factor, 10000));
 		zone->colorwatermark_boost = 0;
 		//if (zone_idx(zone) != ZONE_DMA) {
@@ -9158,9 +9125,13 @@ static void __setup_per_zone_wmarks(void)
 		//}
 
 
-		zone->_colorwatermark[WMARK_MIN]=300;
-		zone->_colorwatermark[WMARK_LOW]=380;
-		zone->_colorwatermark[WMARK_HIGH]=460;
+		// zone->_colorwatermark[WMARK_MIN]=300;
+		// zone->_colorwatermark[WMARK_LOW]=380;
+		// zone->_colorwatermark[WMARK_HIGH]=460;
+
+		// zone->_colorwatermark[WMARK_MIN]=692;
+		// zone->_colorwatermark[WMARK_LOW]=865;
+		// zone->_colorwatermark[WMARK_HIGH]=1038;
 
 
 		spin_unlock_irqrestore(&zone->lock, flags);

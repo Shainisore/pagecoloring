@@ -298,8 +298,13 @@ static inline void *detach_page_private(struct page *page)
 
 #ifdef CONFIG_NUMA
 extern struct page *__page_cache_alloc(gfp_t gfp);
+extern struct page *__page_cache_alloc_normal(gfp_t gfp);
 #else
 static inline struct page *__page_cache_alloc(gfp_t gfp)
+{
+	return alloc_pages(gfp, 0);
+}
+static inline struct page *__page_cache_alloc_normal(gfp_t gfp)
 {
 	return alloc_pages(gfp, 0);
 }
@@ -791,6 +796,8 @@ struct readahead_control {
 	pgoff_t _index;
 	unsigned int _nr_pages;
 	unsigned int _batch_count;
+
+	int color;
 };
 
 #define DEFINE_READAHEAD(ractl, f, r, m, i)				\
@@ -799,6 +806,7 @@ struct readahead_control {
 		.mapping = m,						\
 		.ra = r,						\
 		._index = i,						\
+		.color = 0,						\
 	}
 
 #define VM_READAHEAD_PAGES	(SZ_128K / PAGE_SIZE)
@@ -833,6 +841,16 @@ void page_cache_sync_readahead(struct address_space *mapping,
 	page_cache_sync_ra(&ractl, req_count);
 }
 
+static inline
+void page_cache_sync_readahead_normal(struct address_space *mapping,
+		struct file_ra_state *ra, struct file *file, pgoff_t index,
+		unsigned long req_count)
+{
+	DEFINE_READAHEAD(ractl, file, ra, mapping, index);
+	ractl.color=11;
+	page_cache_sync_ra(&ractl, req_count);
+}
+
 /**
  * page_cache_async_readahead - file readahead for marked pages
  * @mapping: address_space which holds the pagecache and I/O vectors
@@ -853,6 +871,16 @@ void page_cache_async_readahead(struct address_space *mapping,
 		struct page *page, pgoff_t index, unsigned long req_count)
 {
 	DEFINE_READAHEAD(ractl, file, ra, mapping, index);
+	page_cache_async_ra(&ractl, page, req_count);
+}
+
+static inline
+void page_cache_async_readahead_normal(struct address_space *mapping,
+		struct file_ra_state *ra, struct file *file,
+		struct page *page, pgoff_t index, unsigned long req_count)
+{
+	DEFINE_READAHEAD(ractl, file, ra, mapping, index);
+	ractl.color=11;
 	page_cache_async_ra(&ractl, page, req_count);
 }
 

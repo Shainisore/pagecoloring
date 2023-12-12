@@ -3032,9 +3032,6 @@ static void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
 	} while ((memcg = mem_cgroup_iter(target_memcg, memcg, NULL)));
 }
 
-static volatile int shrink_data[200][3];
-static volatile int shrink_data_index=0;
-
 static void shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 {
 	struct reclaim_state *reclaim_state = current->reclaim_state;
@@ -3121,12 +3118,7 @@ again:
 		int z;
 
 		if(sc->order==MAX_ORDER){
-			// free = atomic_long_read(&(pgdat->node_zones+2)->managed_color_pages)
-			// -zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+2, NR_VM_ZONE_STAT_ITEMS);
 			free = sum_zone_node_page_state(pgdat->node_id, NR_FREE_COLOR_PAGES);
-			// free = zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+0, NR_FREE_COLOR_PAGES)
-			// 	 + zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+1, NR_FREE_COLOR_PAGES)
-			// 	 + zone_page_state(NODE_DATA(pgdat->node_id)->node_zones+2, NR_FREE_COLOR_PAGES);
 		} else {
 			free = sum_zone_node_page_state(pgdat->node_id, NR_FREE_PAGES);	
 		}
@@ -3151,10 +3143,6 @@ again:
 				total_high_wmark += high_wmark_pages(zone);
 			}			
 		}
-		// if(sc->order==MAX_ORDER){
-		// 	struct zone *zone = &pgdat->node_zones[2];
-		// 	total_high_wmark = high_wmark_pages(zone)>>3;
-		// }
 
 		/*
 		 * Consider anon: if that's low too, this isn't a
@@ -3169,23 +3157,12 @@ again:
 			anon >> sc->priority;
 	}
 
-	// //debug_stat
-	// if(sc->order == 11)
-	// 	shrink_data[shrink_data_index][0]=sum_zone_node_page_state(0, NR_FREE_COLOR_PAGES);
-
 	shrink_node_memcgs(pgdat, sc);
 
 	if (reclaim_state) {
 		sc->nr_reclaimed += reclaim_state->reclaimed_slab;
 		reclaim_state->reclaimed_slab = 0;
 	}
-
-	// //debug_stat
-	// if(sc->order == 11){
-	// 	shrink_data[shrink_data_index][1]=sc->nr_reclaimed;
-	// 	shrink_data[shrink_data_index][2]=sum_zone_node_page_state(0, NR_FREE_COLOR_PAGES);
-	// 	shrink_data_index=shrink_data_index+1;
-	// }
 
 	/* Record the subtree's reclaim efficiency */
 	vmpressure(sc->gfp_mask, sc->target_mem_cgroup, true,
@@ -3845,7 +3822,6 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 				return true;
 		}
 	}
-
 
 	/*
 	 * If a node has no populated zone within highest_zoneidx, it does not
